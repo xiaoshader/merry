@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>趣味高性能触摸互动树</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        /* 样式保持简洁，确保移动端兼容性 */
+        body { margin: 0; overflow: hidden; background-color: #000000; font-family: 'Arial', sans-serif; touch-action: none; }
+        
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #ffd700;
+            z-index: 10;
+            pointer-events: none;
+            text-shadow: 0 0 5px rgba(255, 215, 0, 0.5);
+        }
+        h1 { margin: 0; font-size: 20px; letter-spacing: 1px; }
+        p { font-size: 12px; opacity: 0.8; margin-top: 5px; }
+        .status { color: #ffffff; font-weight: bold; }
+        
+        /* 移除所有不需要的元素 */
+        #video-container, #loader { display: none; }
+    </style>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <h1>🌈 触摸魔法树</h1>
+        <p>当前状态: <span id="interaction-status" class="status">点击切换形态...</span></p>
+        <p>动作: **点击/点按** 切换形态 | **拖动** 旋转场景</p>
+    </div>
+
+<script>
+    // ================= CONFIGURATION =================
+    const PARTICLE_COUNT = 300; // 增加粒子，利用高性能优势
+    const TREE_HEIGHT = 30;
+    const TREE_BASE_RADIUS = 10;
+    
+    // ================= THREE.JS SETUP =================
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000000);
+
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 500);
+    camera.position.set(0, 15, 50);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    document.body.appendChild(renderer.domElement);
+
+    // --- 灯光设置 ---
+    const ambientLight = new THREE.AmbientLight(0x444444);
+    scene.add(ambientLight);
+
+    const pointLight = new THREE.PointLight(0xffcc00, 1.5, 100);
+    pointLight.position.set(0, 20, 30);
+    scene.add(pointLight);
+
+    // ================= MATERIALS (使用基础材质，但颜色会动态变化) =================
+    // 为了实现动态颜色变化，所有粒子使用 THREE.MeshBasicMaterial
+    const matGlowing = new THREE.MeshBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.9 });
+    const matRed = new THREE.MeshBasicMaterial({ color: 0xdd0000 });
+    const matGreen = new THREE.MeshBasicMaterial({ color: 0x00aa44 });
+
+    // ================= CREATE PARTICLES =================
+    const particles = [];
+    const geoSphereTiny = new THREE.SphereGeometry(0.3, 8, 8); 
+    const geoBoxTiny = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+        let mesh;
+        const rand = Math.random();
+
+        // 随机分配粒子材质和类型
+        let mat;
+        let type;
+        if (rand < 0.5) { 
+            mat = matGlowing; type = 'glow';
+        } else if (rand < 0.75) { 
+            mat = matRed; type = 'red';
+        } else { 
+            mat = matGreen; type = 'green';
+        }
+        
+        mesh = new THREE.Mesh(rand < 0.5 ? geoSphereTiny : geoBoxTiny, mat);
+
+        // --- 树形态位置计算 ---
+        const p = i / PARTICLE_COUNT;
+        const heightProgress = Math.pow(p, 0.8); 
+        const yTree = heightProgress * TREE_HEIGHT - (TREE_HEIGHT / 2);
+        const radiusAtY = TREE_BASE_RADIUS * (1 - heightProgress);
+        const angle = i * 0.7 + Math.random() * 0.5;
+        const randomRadiusOffset = Math.random() * radiusAtY * 0.4;
+        const xTree = Math.cos(angle) * (radiusAtY - randomRadiusOffset);
+        const zTree = Math.sin(angle) * (radiusAtY - randomRadiusOffset);
+        
+        // --- 爆炸形态位置计算 ---
+        const explodeR = (Math.random() * 0.5 + 0.5) * 45; 
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos((Math.random() * 2) - 1);
+        
+        const xExp = explodeR * Math.sin(phi) * Math.cos(theta);
+        const yExp = explodeR * Math.sin(phi) * Math.sin(theta);
+        const zExp = explodeR * Math.cos(phi);
+
+        mesh.userData = {
+            treePos: new THREE.Vector3(xTree, yTree, zTree),
+            explodePos: new THREE.Vector3(xExp, yExp, zExp),
+            rotSpeed: new THREE.Vector3( 
+                (Math.random()-0.5)*0.03, 
+                (Math.random()-0.5)*0.03, 
+                (Math.random()-0.5)*0.03
+            ),
+            initialRot: new THREE.Euler(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI),
+            particleType: type // 存储粒子类型用于颜色变化
+        };
+
+        mesh.position.copy(mesh.userData.treePos);
+        mesh.rotation.copy(mesh.userData.initialRot);
+        
+        scene.add(mesh);
+        particles.push(mesh);
+    }
+    
+    // --- 树顶小星星 ---
+    const topStarGeo = new THREE.OctahedronGeometry(1.5, 0); 
+    const topStarMat = new THREE.MeshBasicMaterial({ color: 0xffff00 }); 
+    const topStar = new THREE.Mesh(topStarGeo, topStarMat);
+    topStar.position.set(0, TREE_HEIGHT/2 + 1.5, 0);
+    scene.add(topStar);
+
+    // ================= INTERACTION LOGIC =================
+    const statusElement = document.getElementById('interaction-status');
+    let isExploded = false; 
+    let targetExplosionFactor = 0; 
+    let currentExplosionFactor = 0;
+    
+    // --- 拖动旋转变量 ---
+    let isDragging = false;
+    let previousTouchX = 0;
+    
+    function updateExplosionState() {
+        isExploded = !isExploded;
+        targetExplosionFactor = isExploded ? 1.0 : 0.0;
+        statusElement.innerHTML = isExploded ? "🚀 **爆炸形态**" : "🌲 **聚合形态**";
+        statusElement.style.color = isExploded ? "#ff5555" : "#ffffff";
+        
+        // 增加爆炸/聚合时的冲击波
+        currentExplosionFactor += isExploded ? 0.05 : -0.05; 
+        currentExplosionFactor = Math.max(0, Math.min(1, currentExplosionFactor));
+    }
+
+    function onInteractionStart(event) {
+        event.preventDefault(); 
+        isDragging = true;
+        
+        previousTouchX = event.touches ? event.touches[0].clientX : event.clientX;
+    }
+
+    function onInteractionMove(event) {
+        if (!isDragging) return;
+        event.preventDefault(); 
+
+        const currentX = event.touches ? event.touches[0].clientX : event.clientX;
+        const deltaX = currentX - previousTouchX;
+        
+        // 旋转场景
+        scene.rotation.y += deltaX * 0.007; // 更高的旋转灵敏度
+        
+        // 将拖动速度转换为“冲击波”效果
+        const speedFactor = Math.abs(deltaX) * 0.005;
+        if (speedFactor > 0.1) {
+            // 短暂冲击目标爆炸值，增加场景响应性
+            targetExplosionFactor = Math.min(1.0, targetExplosionFactor + 0.01); 
+        }
+
+        previousTouchX = currentX;
+    }
+
+    function onInteractionEnd(event) {
+        event.preventDefault();
+        isDragging = false;
+    }
+    
+    // 使用点击事件来切换形态
+    renderer.domElement.addEventListener('click', updateExplosionState, false);
+
+    renderer.domElement.addEventListener('mousedown', onInteractionStart, false);
+    renderer.domElement.addEventListener('mousemove', onInteractionMove, false);
+    renderer.domElement.addEventListener('mouseup', onInteractionEnd, false);
+    
+    renderer.domElement.addEventListener('touchstart', onInteractionStart, false);
+    renderer.domElement.addEventListener('touchmove', onInteractionMove, false);
+    renderer.domElement.addEventListener('touchend', onInteractionEnd, false);
+
+    // ================= ANIMATION LOOP =================
+    const clock = new THREE.Clock();
+    const tempColor = new THREE.Color(); // 临时颜色对象，避免重复创建
+
+    function animate() {
+        requestAnimationFrame(animate);
+        const time = clock.getElapsedTime();
+
+        // --- 1. 动态颜色变化 (趣味性升级) ---
+        // 周期性变色，每 10 秒完成一个色相循环
+        const hue = (time * 0.05) % 1; 
+        
+        // 更新材质颜色
+        matGlowing.color.setHSL(hue, 1.0, 0.6); // 主色调跟随时间变化
+        matRed.color.setHSL((hue + 0.1) % 1, 0.8, 0.4); 
+        matGreen.color.setHSL((hue + 0.5) % 1, 0.8, 0.4);
+        
+        topStarMat.color.setHSL((hue + 0.05) % 1, 1.0, 0.7); // 星星颜色也跟着动
+
+        // --- 2. 状态插值与响应 ---
+        const lerpSpeed = targetExplosionFactor > currentExplosionFactor ? 0.15 : 0.1;
+        currentExplosionFactor += (targetExplosionFactor - currentExplosionFactor) * lerpSpeed;
+
+        // 树顶星星动画
+        topStar.rotation.y = time * 0.3;
+
+        // 更新粒子
+        particles.forEach(p => {
+            const targetPos = new THREE.Vector3().lerpVectors(p.userData.treePos, p.userData.explodePos, currentExplosionFactor);
+            p.position.lerp(targetPos, 0.25); // 更快的粒子移动，增强响应速度
+            
+            p.rotation.x += p.userData.rotSpeed.x;
+            p.rotation.y += p.userData.rotSpeed.y;
+            p.rotation.z += p.userData.rotSpeed.z;
+
+            // --- 3. 粒子自适应大小 (趣味性升级) ---
+            const baseScale = 0.5 + Math.sin(time * 5 + p.position.x * 0.1) * 0.1; // 呼吸光效/波动
+            // 爆炸时放大比例更高，增加冲击感
+            const dynamicScale = baseScale + currentExplosionFactor * 0.7; 
+            p.scale.setScalar(dynamicScale);
+
+        });
+
+        renderer.render(scene, camera); 
+    }
+
+    animate();
+
+    // ================= RESIZE =================
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+</script>
+</body>
+</html>
